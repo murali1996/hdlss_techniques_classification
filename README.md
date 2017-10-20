@@ -31,3 +31,6 @@ cross-validation as a powerful general technique. In summary,
 cross-validation combines (averages) measures of fit (prediction error)
 to derive a more accurate estimate of model prediction performance.
 
+**refer to Readme.pdf for detailed explanation with examples and images**
+
+
