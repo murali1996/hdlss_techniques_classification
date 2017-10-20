@@ -1,0 +1,202 @@
+# 1. Install packages to read the NCBI's GEO microarray SOFT files in R
+# 1.Ref. http://www2.warwick.ac.uk/fac/sci/moac/people/students/peter_cock/r/geo/
+# 1.1. Uncomment only once to install stuff
+# source("https://bioconductor.org/biocLite.R")
+# biocLite("GEOquery")
+# biocLite("Affyhgu133aExpr")
+###########################################################
+###########################################################
+# 1.2. Use packages 
+library(Biobase)
+library(GEOquery)
+library(glmnet) # elastic net
+library(matrixStats) # For pre-processing
+###########################################################
+###########################################################
+# 2. Read data and convert to dataframe. Comment to save time after first run of the program in an R session
+# 2.1. Once download data from ftp://ftp.ncbi.nlm.nih.gov/geo/datasets/GDS2nnn/GDS2771/soft/GDS2771.soft.gz
+# 2.Ref.1. About data: http://www.ncbi.nlm.nih.gov/sites/GDSbrowser?acc=GDS2771
+# 2.Ref.2. Study that uses that data http://www.ncbi.nlm.nih.gov/pmc/articles/PMC3694402/pdf/nihms471724.pdf
+# 2.Warning. Note that do not use FULL SOFT, only SOFT, as mentioned in the link above.
+# 2.2.R. http://stackoverflow.com/questions/20174284/error-in-gzfilefname-open-rt-invalid-description-argument
+gds2771 <- getGEO(filename='F:/Assignments and Projects/Adv ML/Assignment 1/GDS2771.soft.gz') 
+eset2771 <- GDS2eSet(gds2771) 
+###########################################################
+###########################################################
+# 2.2. View data (optional; can be commented).
+# See http://www2.warwick.ac.uk/fac/sci/moac/people/students/peter_cock/r/geo/
+eset2771 # View some meta data
+featureNames(eset2771)[1:10] # View first feature names
+sampleNames(eset2771) # View patient IDs. Should be 192
+pData(eset2771)$disease.state #View disease state of each patient. Should be 192
+###########################################################
+###########################################################
+# 2.3. Convert to data frame by concatenating disease.state with data, using first row as column names, and deleting first row
+data2771 <- cbind2(c('disease.state',pData(eset2771)$disease.state),t(Table(gds2771)[,2:194]))
+colnames(data2771) = data2771[1, ] # the first row will be the header
+data2771 = data2771[-1, ] 
+###########################################################
+###########################################################
+# 2.4. View data frame (optional; can be commented)
+#View(data2771)
+#rm(_unwanted-variables_)
+###########################################################
+###########################################################
+# Pre-processing: Removing NA Values: http://stackoverflow.com/questions/34865789/replacing-nas-in-each-column-with-the-median-of-that-column
+# The columns with No. of NAs >75% are removed
+mat<-as.matrix(data2771[1:187,1:22216])
+mode(mat)<-'numeric' # mat<-sapply(mat,as.numeric)
+###########################################################
+###########################################################
+# Using Cross-Validation:
+# Finding the lambda with least avg. misclassification error for a given value of alpha
+# In case of lasso and ridge, CV helps choose the value of the tuning parameter lambda.
+# Ctrl+Shift+C to comment more lines
+# Please refer to MaxN function at the end.
+###########################################################
+###########################################################
+# LASSO
+set.seed(1)
+alpha=1
+glmmod <- cv.glmnet(x=mat[,2:ncol(mat)],y=as.factor(mat[,1]),alpha=alpha,nfolds=10,family="binomial",type.measure = "class")
+summary(glmmod)
+plot(glmmod$lambda) #Lambdas used for the given alpha
+plot(glmmod) # Mis-classification errors for each lambda
+plot(glmmod$lambda,glmmod$nzero) #Non-Zero Co-effs at each lambda value
+plot(glmmod$glmnet.fit, "lambda", label=TRUE) #Also can replace "lambda" with "norm"
+glmmod$lambda.min #lambda corresponding to min accuracy
+min(glmmod$cvm) # CVM at that index of min cvm
+lassonzcoeff<-which((coef(glmmod, s = glmmod$lambda.min))!=0) # The non-Zero Coeff. in [1:22216]
+top25Lasso<-matrix(0,1,25)
+for (i in 1:25){
+  top25Lasso[i]<-lassonzcoeff[which(abs(coef(glmmod)[lassonzcoeff])==maxN(abs(coef(glmmod)[lassonzcoeff]),i))]
+}
+rm(alpha, glmmod, lassonzcoeff) #Remove and clear the items in workspce
+###########################################################
+###########################################################
+# RIDGE
+set.seed(1)
+alpha=0
+glmmod <- cv.glmnet(x=mat[,2:ncol(mat)],y=as.factor(mat[,1]),alpha=alpha,nfolds=10,family="binomial",type.measure = "class")
+summary(glmmod)
+plot(glmmod$lambda) #Lambdas used for the given alpha
+plot(glmmod) # Mis-classification errors for each lambda
+plot(glmmod$glmnet.fit, "lambda", label=TRUE) #Also can replace "lambda" with "norm"
+which(glmmod$lambda==glmmod$lambda.min) #Index of lambda.min
+min(glmmod$cvm) # CVM at that index of min cvm
+ridgecoeff<-(coef(glmmod, s = glmmod$lambda.min))@x # The [1:22216] Co-effes.
+top25Ridge<-matrix(0,1,25)
+for (i in 1:25){
+  top25Ridge[i]<-which(abs(ridgecoeff)==maxN(abs(ridgecoeff),i))
+}
+top25Ridge<-sort(top25Ridge, decreasing = TRUE)
+print(top25Ridge)
+rm(i,alpha, glmmod, ridgecoeff, top25Ridge)
+###########################################################
+###########################################################
+# LASSO,RIDGE,ELASTIC NET
+set.seed(1)
+# alphaslist<-seq(0,1,by=0.01)
+alphaslist<-seq(0,1,by=0.5)
+elasticnet<-lapply(alphaslist, function(a){cv.glmnet(x=mat[,2:ncol(mat)],y=as.factor(mat[,1]),alpha=a,nfolds=10,family="binomial",type.measure="class")})
+result<-matrix(0, length(alphaslist), 4)
+for (i in 1:length(alphaslist)) {
+  result[i,]<-c(alphaslist[[i]],min(elasticnet[[i]]$lambda.min),min(elasticnet[[i]]$cvm),100*(1-min(elasticnet[[i]]$cvm)))
+} # result #print(result[which.max(result[,4]),])
+plot(result[,1],result[,2],xlab ="Range of Alpha Values belonging to [0,1]", ylab="$lambda.min")
+plot(result[,1],result[,3],xlab ="Range of Alpha Values belonging to [0,1]", ylab="$lambda.min")
+glmmod<-elasticnet[[which.max(result[,4])]]
+summary(glmmod) #Summary of the model with best hyper-parameters
+plot(glmmod) # Mis-classification errors for each lambda
+plot(glmmod$glmnet.fit, "lambda", label=TRUE) #Also can replace "lambda" with "norm"
+plot(glmmod$lambda, glmmod$nzero) #Non-Zero Co-effs at each lambda value
+which(glmmod$lambda==glmmod$lambda.min) #Index of lambda.min
+min(glmmod$cvm) # CVM at that index of min cvm
+elasticNetnzcoeff<-which((coef(glmmod, s = glmmod$lambda.min))!=0) # The non-Zero Coeff. in [1:22216]
+top25elasticNet<-matrix(0,1,25)
+for (i in 1:25){
+  top25elasticNet[i]<-elasticNetnzcoeff[which(abs(coef(glmmod)[elasticNetnzcoeff])==maxN(abs(coef(glmmod)[elasticNetnzcoeff]),i))]
+}
+rm(alphaslist, elasticNet,  glmmod, elasticNetnzcoeff)
+###########################################################
+###########################################################
+# SCAD
+# https://cran.r-project.org/web/packages/ncvreg/ncvreg.pdf
+# http://www.stat.rice.edu/~gallen/stat640/lecture6_code.R
+set.seed(1)
+library(ncvreg)
+scadmod<-cv.ncvreg(mat[,2:ncol(mat)],as.factor(mat[,1]),nfolds=10,seed=1,penalty="SCAD")
+plot(scadmod)
+plot(scadmod$lambda)
+plot(scadmod$lambda,scadmod$cve)
+print((1-min(scadmod$cve))*100) #The min cross-validation error
+print(scadmod$lambda.min) #The lambda corr. to min cve
+plot(scadmod$fit)
+rm(scadmod,fit)
+###########################################################
+###########################################################
+# MCP
+# https://cran.r-project.org/web/packages/ncvreg/ncvreg.pdf
+set.seed(1)
+library(ncvreg)
+mcpmod<-cv.ncvreg(mat[,2:ncol(mat)],as.factor(mat[,1]),nfolds=10,seed=1,penalty="MCP")
+plot(mcpmod)
+print((1-min(mcpmod$cve))*100) #The min cross-validation error
+print(mcpmod$lambda.min) #The lambda corr. to min cve
+fit<-mcpmod$fit
+plot(fit)
+rm(mcpmod,fit)
+###########################################################
+###########################################################
+# SVM
+library(e1071)
+set.seed(1)
+svmmod<- svm(x=mat[,2:ncol(mat)],y=as.factor(mat[,1]),cross=15)
+summary(svmmod)
+svmmod$tot.accuracy #Avg accuracy
+plot(svmmod$accuracies)
+svmmod$coefs
+rm(svmmod)
+###############################
+# PCA + SVM 
+# Best(5 fold): 64.70588% Accuracy
+# Best(10 fold): 64.17112% Accuarcy
+library(e1071)
+library(caret)
+trans<-preProcess(mat[,2:ncol(mat)],method=c("BoxCox","center","scale","pca"))
+PC<-predict(trans,mat[,2:ncol(mat)])
+svmmod<- svm(x=PC,y=as.factor(mat[,1]),cross=5)
+summary(svmmod)
+rm(trans, PC, svmmod)
+###########################################################
+###########################################################
+# Random Forest
+set.seed(1)
+library('randomForest')
+# ranFormod<-rfcv(mat[,2:ncol(mat)], as.factor(mat[,1]), cv.fold=3)
+ranFormod<-randomForest(mat[,2:ncol(mat)], as.factor(mat[,1]))
+plot(ranFormod)
+ranFormod$confusion
+# ranFormod$error.cv
+impResult<-ranFormod$importance
+top25ranFor<-matrix(0,1,25)
+for (i in 1:25){
+  top25ranFor[i]<-which(abs(impResult)==maxN(abs(impResult),i))
+}
+###########################################################
+###########################################################
+###########################################################
+# Function to find top nth value in a vector
+maxN <- function(x, N){
+  len <- length(x)
+  if(N>len){
+    warning('N greater than length(x).  Setting N=length(x)')
+    N <- length(x)
+  }
+  sort(x,partial=len-N+1)[len-N+1]
+}
+# Ex: 
+# vec<-c(-32:15)
+# which(abs(vec)==maxN(abs(vec),3))
+###########################################################
+###########################################################
